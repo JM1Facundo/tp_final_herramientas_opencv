@@ -1,97 +1,112 @@
 import cv2
 import numpy as np
 from pathlib import Path
-import shutil
 import matplotlib.pyplot as plt
+import shutil
 
-# 1. Creamos imagenes usando OpenCV:
-def cargar_imagen(ruta):
-    """Carga una imagen usando OpenCV y la retorna en BGR."""
-    img = cv2.imread(str(ruta), cv2.IMREAD_UNCHANGED)
-    return img
 
-# 2. Redimensionamos la imagenes:
-def redimensionar(img, size=(800, 800)):
-    return cv2.resize(img, size, interpolation=cv2.INTER_AREA)
+def asegurar_dir(path):
+    """Crear carpeta si no existe."""
+    Path(path).mkdir(parents=True, exist_ok=True)
 
-# 3. Conversion a escala de grises:
-def a_grises(img):
-    """Retorna imagen en escala de grises."""
-    return cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
-# 4. Recorte automatico:
-def recortar_bordes(img):
-    """Recorta los bordes blancos basándose en píxeles no vacíos."""
-    coords = np.column_stack(np.where(img < 255))
+def clasificar_y_copiar(ruta_raw, ruta_destino):
+    """Clasifica imágenes por clase (según nombre del archivo) y copia."""
+    asegurar_dir(ruta_destino)
 
-    if coords.size == 0:
-        return img
+    for img_path in Path(ruta_raw).rglob("*.png"):
+        clase = img_path.stem.split("_")[0]
+        destino_clase = Path(ruta_destino) / clase
+        asegurar_dir(destino_clase)
+        shutil.copy(img_path, destino_clase / img_path.name)
 
-    y_min, x_min = coords.min(axis=0)
-    y_max, x_max = coords.max(axis=0)
-    return img[y_min:y_max+1, x_min:x_max+1]
 
-# 5. Generar PNG con transparencias:
-def agregar_transparencia(img_gris):
-    """Convierte fondo blanco en transparencia usando canal alpha."""
-    rgba = cv2.cvtColor(img_gris, cv2.COLOR_GRAY2BGRA)
+def convertir_bn(ruta_in, ruta_out):
+    """Convierte imágenes a blanco y negro en OpenCV."""
+    asegurar_dir(ruta_out)
 
-    # Fondo blanco → alpha = 0
-    rgba[:, :, 3] = np.where(img_gris == 255, 0, 255)
+    for img_path in Path(ruta_in).rglob("*.png"):
+        img = cv2.imread(str(img_path), cv2.IMREAD_GRAYSCALE)
+        if img is None:
+            continue
+        cv2.imwrite(str(Path(ruta_out) / img_path.name), img)
 
-    return rgba
 
-# 6. Colorear figuras:
-def colorizar(img_rgba, hex_color):
-    rgb = tuple(int(hex_color[i:i+2], 16) for i in (1, 3, 5))
+def redimensionar(ruta_in, ruta_out, size=(128, 128)):
+    """Redimensiona imágenes usando OpenCV."""
+    asegurar_dir(ruta_out)
 
-    mask = img_rgba[:, :, 3] == 255
-    img_rgba[mask, :3] = rgb
+    for img_path in Path(ruta_in).rglob("*.png"):
+        img = cv2.imread(str(img_path))
+        if img is None:
+            continue
+        img_resized = cv2.resize(img, size, interpolation=cv2.INTER_AREA)
+        cv2.imwrite(str(Path(ruta_out) / img_path.name), img_resized)
 
-    return img_rgba
 
-# 7. Dectectar puntos extremos:
-def puntos_extremos(img_binaria):
-    contornos, _ = cv2.findContours(img_binaria, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+def aplicar_transparencia(ruta_in, ruta_out):
+    """Hace blanco → transparente (canal alfa)."""
+    asegurar_dir(ruta_out)
 
-    if len(contornos) == 0:
-        return None
+    for img_path in Path(ruta_in).rglob("*.png"):
+        img = cv2.imread(str(img_path))
+        if img is None:
+            continue
 
-    c = max(contornos, key=cv2.contourArea)
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        _, alpha = cv2.threshold(gray, 250, 255, cv2.THRESH_BINARY_INV)
 
-    izquierda = tuple(c[c[:, :, 0].argmin()][0])
-    derecha   = tuple(c[c[:, :, 0].argmax()][0])
-    arriba    = tuple(c[c[:, :, 1].argmin()][0])
-    abajo     = tuple(c[c[:, :, 1].argmax()][0])
+        bgra = cv2.cvtColor(img, cv2.COLOR_BGR2BGRA)
+        bgra[:, :, 3] = alpha
 
-    return izquierda, derecha, arriba, abajo
+        cv2.imwrite(str(Path(ruta_out) / img_path.name), bgra)
 
-# 8. Escribir nombre centrado:
-def escribir_nombre(img_rgba, texto):
-    img_bgr = cv2.cvtColor(img_rgba, cv2.COLOR_BGRA2BGR)
-    h, w, _ = img_bgr.shape
 
-    font = cv2.FONT_HERSHEY_SIMPLEX
-    scale = 1
-    thickness = 2
+def contar_pixeles(ruta_in, ruta_salida_stats):
+    """Conteo de píxeles por clase y gráfico final."""
+    asegurar_dir(ruta_salida_stats)
 
-    text_w, text_h = cv2.getTextSize(texto, font, scale, thickness)[0]
-    x = (w - text_w) // 2
-    y = h - 20
+    conteo = {}
 
-    cv2.putText(img_bgr, texto, (x, y), font, scale, (0, 0, 0), thickness)
-    return cv2.cvtColor(img_bgr, cv2.COLOR_BGR2BGRA)
+    for img_path in Path(ruta_in).rglob("*.png"):
+        clase = img_path.stem.split("_")[0]
+        img = cv2.imread(str(img_path), cv2.IMREAD_UNCHANGED)
+        if img is None:
+            continue
 
-# 9. Contar pixeles.
-def contar_pixeles(mask):
-    return np.sum(mask == 255)
+        total_pixels = img.shape[0] * img.shape[1]
+        conteo[clase] = conteo.get(clase, 0) + total_pixels
 
-# 10. Mostrar imagenes:
-def mostrar(img, title=""):
-    if img.ndim == 2:
-        plt.imshow(img, cmap="gray")
-    else:
-        plt.imshow(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
-    plt.title(title)
-    plt.axis("off")
-    plt.show()
+    clases = sorted(conteo.keys(), key=lambda x: conteo[x])
+    valores = [conteo[c] for c in clases]
+
+    plt.figure(figsize=(12, 6))
+    plt.bar(clases, valores)
+    plt.xticks(rotation=45)
+    plt.title("Cantidad de píxeles por clase")
+    plt.tight_layout()
+
+    plt.savefig(Path(ruta_salida_stats) / "grafico_pixeles.png")
+    plt.close()
+
+    return conteo
+
+
+def ejecutar_pipeline(paths):
+    """Ejecuta todas las fases del procesamiento."""
+    print("Fase 1: Clasificación")
+    clasificar_y_copiar(paths["raw"], paths["interim_bw"])
+
+    print("Fase 2: Blanco y negro")
+    convertir_bn(paths["interim_bw"], paths["interim_resize"])
+
+    print("Fase 3: Redimensionar")
+    redimensionar(paths["interim_resize"], paths["interim_transparent"])
+
+    print("Fase 4: Transparencia")
+    aplicar_transparencia(paths["interim_transparent"], paths["raw"])  # o a otra carpeta
+
+    print("Fase 5: Conteo de píxeles")
+    contar_pixeles(paths["interim_transparent"], paths["processed_stats"])
+
+    print("Pipeline completado.")
